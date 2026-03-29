@@ -9,6 +9,7 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdio.h>
 
 // ウィンドウのサイズ（後でDirectXのバックバッファサイズと合わせる）
 constexpr int WINDOW_WIDTH = 1280;
@@ -109,20 +110,74 @@ int WINAPI WinMain(
     UpdateWindow(hwnd);
 
     // --------------------------------------------------------
-    // 5. メッセージループ
+    // タイマーの初期化
     // --------------------------------------------------------
-    // Win32プログラムの心臓部。
-    // OSはキー入力やマウス操作をメッセージキューに積む。
-    // GetMessage()はキューからメッセージを1つ取り出し、WndProc()に転送する。
-    // WM_QUITメッセージが来るとGetMessage()は0を返し、ループが終了する。
-    //
-    // 注意: GetMessage()はメッセージが来るまでブロック（待機）する。
-    //       ゲームループとしてはこれでは不十分で、Day 2でPeekMessage()に書き換える。
+    // QueryPerformanceCounter は CPU の高精度タイマーを読む関数。
+    // Frequency（1秒あたりのカウント数）を取得し、
+    // フレーム間のカウント差を Frequency で割ると経過秒数が求まる
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+
+    LARGE_INTEGER previousTime;
+    QueryPerformanceCounter(&previousTime);
+
+    float deltaTime = 0.0f;
+
+    // --------------------------------------------------------
+    // 5. ゲームループ
+    // --------------------------------------------------------
+    // PeekMessage()を使ったリアルタイムループ
+    // メッセージがあれば処理し、なければゲームの更新と描画を行う。
+    // ゲームはこの構造が基本になる。
     MSG msg = {};
-    while (GetMessage(&msg, nullptr, 0, 0))
+    bool isRunning = true;
+    float fpsTimer = 0.0f;
+    int   frameCount = 0;
+
+    while (isRunning)
     {
-        TranslateMessage(&msg); // キー入力をWM_CHARメッセージに変換
-        DispatchMessage(&msg);  // WndProc()にメッセージを転送
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT)
+            {
+                isRunning = false;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
+        if (isRunning)
+        {
+            // deltaTime計算
+            LARGE_INTEGER currentTime;
+            QueryPerformanceCounter(&currentTime);
+            float deltaTime = static_cast<float>(currentTime.QuadPart - previousTime.QuadPart)
+                            / static_cast<float>(frequency.QuadPart);
+            previousTime = currentTime;
+
+            // Update（今は空）
+            // TODO: ゲームロジックの更新
+
+            // Render（今は空）
+            // TODO: DirectXによる描画（Day 3〜4で実装）
+
+            // FPS表示
+            fpsTimer += deltaTime;
+            frameCount++;
+            if (fpsTimer >= 1.0f)
+            {
+                wchar_t fpsText[64];
+                swprintf_s(fpsText, L"DX11 Demo - FPS: %d\n", frameCount);
+                OutputDebugString(fpsText);
+
+                // タイトルバーにもFPSを表示（便利）
+                SetWindowText(hwnd, fpsText);
+
+                fpsTimer = 0.0f;
+                frameCount = 0;
+            }
+        }
     }
 
     return static_cast<int>(msg.wParam);
