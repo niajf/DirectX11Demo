@@ -1,0 +1,52 @@
+# ============================================================
+# Visual Studio / C++ DirectX プロジェクト用 .gitignore
+# ============================================================
+
+# --- ビルド出力 ---
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+out/
+[Bb]uild/
+
+# --- Visual Studio 一時ファイル ---
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# --- コンパイル中間ファイル ---
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.log
+*.tlog
+*.lastbuildstate
+*.idb
+*.iobj
+*.ipdb
+*.d
+
+# --- リンカー出力 ---
+*.exe
+*.dll
+*.lib
+*.exp
+
+# --- IntelliSense / Browse DB ---
+*.db
+*.opendb
+*.VC.db
+ipch/
+
+# --- シェーダーコンパイル出力（ソースの.hlslは追跡する）---
+*.cso
+*.fxo
+
+# --- OS生成ファイル ---
+Thumbs.db
+desktop.ini
+.DS_Store
