@@ -11,13 +11,244 @@
 #include <windows.h>
 #include <stdio.h>
 
+// ----- DirectX11 -----
+#include <d3d11.h>          // D3D11のコアAPI
+#include <dxgi.h >          // DXGI(ディスプレイ関連)
+#include <wrl/client.h>     // ComPtr
+
+// ライブラリのリンク
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+
+
+// ComPtrを短く書くためのusing宣言
+using Microsoft::WRL::ComPtr;
+
+
 // ウィンドウのサイズ（後でDirectXのバックバッファサイズと合わせる）
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 720;
 
+// ---- DirectX11 オブジェクト-----
+ComPtr<ID3D11Device> g_device;                      // リソース生成担当
+ComPtr<ID3D11DeviceContext> g_deviceContext;        // 描画コマンド担当
+ComPtr<IDXGISwapChain> g_swapChain;                 // ダブルバッファリング
+ComPtr<ID3D11RenderTargetView> g_renderTargetView;  // 描画先の指定
+
 // ウィンドウプロシージャの前方宣言
 // OSからのメッセージ（キー入力、マウス、閉じるボタン等）を処理するコールバック関数
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+
+// ============================================================
+// InitD3D — Direct3D 11の初期化
+// ============================================================
+// 成功したら true、失敗したら false を返す。
+// この関数で以下の4つを作成する:
+//   1. ID3D11Device           (g_device)
+//   2. ID3D11DeviceContext     (g_deviceContext)
+//   3. IDXGISwapChain          (g_swapChain)
+//   4. ID3D11RenderTargetView  (g_renderTargetView)
+// ============================================================
+bool  InitD3D(HWND hwnd)
+{
+   // --------------------------------------------------------
+   // 1. スワップチェインの設定を記述する
+   // --------------------------------------------------------
+   // DXGI_SWAP_CHAIN_DESC は「どんなスワップチェインが欲しいか」の注文書。
+   // まずゼロ初期化してから、必要なフィールドだけ埋める。
+   DXGI_SWAP_CHAIN_DESC scd = {};
+
+   // バックバッファの幅と高さ（ウィンドウのクライアント領域と一致させる）
+   scd.BufferDesc.Width = WINDOW_WIDTH;
+   scd.BufferDesc.Height = WINDOW_HEIGHT;
+
+   // リフレッシュレート（60Hz）
+   // Numerator / Denominator = 60/1 = 60fps
+   scd.BufferDesc.RefreshRate.Numerator = 60;
+   scd.BufferDesc.RefreshRate.Denominator = 1;
+
+   // ピクセルフォーマット
+   // R8G8B8A8_UNORM = 赤緑青+アルファ各8ビット、0.0〜1.0の範囲に正規化
+   // 最も一般的なフォーマット
+   scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+
+   // マルチサンプリング（アンチエイリアス）の設定
+   // Count=1, Quality=0 はマルチサンプリングなし（最もシンプル）
+   scd.SampleDesc.Count = 1;
+   scd.SampleDesc.Quality = 0;
+
+   // バックバッファの用途: レンダーターゲット（描画先）として使う
+   scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+
+   // バックバッファの数（ダブルバッファリングなので1）
+   // 「フロント1枚 + バック1枚」で合計2枚。ここで指定するのはバック側の枚数。
+   scd.BufferCount = 1;
+
+   // 描画先のウィンドウハンドル
+   scd.OutputWindow = hwnd;
+
+   // ウィンドウモード（TRUE）/ フルスクリーン（FALSE）
+   scd.Windowed = TRUE;
+
+   // スワップ時の動作: DISCARD = 前のバッファの内容を保持しない（最も効率的）
+   scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+   // --------------------------------------------------------
+   // 2. デバイスとスワップチェインを一括作成
+   // --------------------------------------------------------
+   // D3D11CreateDeviceAndSwapChain は名前の通り、
+   // Device, DeviceContext, SwapChain の3つを一度に作ってくれる便利関数。
+   //
+   // 引数が多いが、重要なのは以下:
+   //   - D3D_DRIVER_TYPE_HARDWARE: GPUを使う（ソフトウェアレンダリングではない）
+   //   - D3D11_CREATE_DEVICE_DEBUG: デバッグレイヤーを有効にする（開発中は必須）
+   //   - D3D11_SDK_VERSION: 常にこの定数を渡す
+
+   UINT createDeviceFlags = 0;
+#ifdef DEBUG
+   // デバッグビルド時のみデバッグレイヤーを有効にする。
+   // APIの誤用をVisual Studioの出力ウィンドウに警告してくれる。
+   // リリースビルドでは無効にすること（パフォーマンスに影響する）。
+   createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif // DEBUG
+
+   // 対応するフィーチャーレベル（DirectXのバージョン）を指定
+   // 11_0 を最優先にし、対応していなければ10_1, 10_0にフォールバック
+   D3D_FEATURE_LEVEL featureLevels[] = {
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+   };
+
+   D3D_FEATURE_LEVEL featureLevelOut;   // 実際に選ばれたフィーチャーレベルが返る
+
+   HRESULT hr = D3D11CreateDeviceAndSwapChain(
+       nullptr,                         // アダプター: nullptrでデフォルトGPU
+       D3D_DRIVER_TYPE_HARDWARE,        //ハードウェア（GPU)を使用
+       nullptr,                         // ソフトウェアラスタライザー（使わない）
+       createDeviceFlags,               // デバッグフラッグ
+       featureLevels,                   // フィーチャーレベルの配列
+       _countof(featureLevels),         // 配列の要素数
+       D3D11_SDK_VERSION,               // 常にこの値
+       &scd,                            // スワップチェインの設定
+       g_swapChain.GetAddressOf(),      // [出力] スワップチェイン
+       g_device.GetAddressOf(),         // [出力] デバイス
+       &featureLevelOut,                // [出力] 選ばれたフィーチャーレベル
+       g_deviceContext.GetAddressOf()   // [出力] デバイスコンテキスト
+   );
+
+   // HRESULTはWindowsのエラーコード。FAILED()マクロで失敗判定
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"D3D11CreateDeviceAndSwapChainに失敗しました", L"エラー", MB_OK);
+       return false;
+   }
+
+   // --------------------------------------------------------
+   // 3. レンダーターゲットビューの作成
+   // --------------------------------------------------------
+   // スワップチェインが持つバックバッファ（テクスチャ）を取得し、
+   // それを「描画先」として使うためのビューを作る。
+   //
+   // 手順:
+   //   (a) SwapChain::GetBuffer() でバックバッファのテクスチャを取得
+   //   (b) Device::CreateRenderTargetView() でビューを作成
+
+   // (a) バックバッファテクスチャを取得
+   ComPtr<ID3D11Texture2D> backBuffer;
+   hr = g_swapChain->GetBuffer(
+       0,                                                       // バッファのインデックス(0 = 最初のバックバッファ)
+       __uuidof(ID3D11Texture2D),                               // 取得したいインターフェースの型
+       reinterpret_cast<void**>(backBuffer.GetAddressOf())      // [出力] テクスチャ
+   );
+
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"バックバッファの取得に失敗しました", L"エラー", MB_OK);
+       return false;
+   }
+
+   // (b) レンダーターゲットビューを作成
+   hr = g_device->CreateRenderTargetView(
+       backBuffer.Get(),                    // 対象のテクスチャ（バックバッファ）
+       nullptr,                             // ビューの詳細設定（nullptrでデフォルト）
+       g_renderTargetView.GetAddressOf()    // [出力] レンダーターゲットビュー
+   );
+   // backBufferはこのスコープを抜けると自動でReleaseする
+   // レンダーターゲットビューがバックバッファへの参照を保持しているので問題はない
+    
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"レンダーターゲットビューの作成に失敗しました", L"エラー", MB_OK);
+       return false;
+   }
+
+   // --------------------------------------------------------
+   // 4. ビューポートの設定
+   // --------------------------------------------------------
+   // ビューポートは「描画結果をウィンドウのどの範囲に表示するか」を定義する。
+   // 通常はウィンドウ全体に描画する。
+   D3D11_VIEWPORT viewport = {};
+   viewport.TopLeftX = 0.0f;
+   viewport.TopLeftY = 0.0f;
+   viewport.Width = static_cast<float>(WINDOW_WIDTH);
+   viewport.Height = static_cast<float>(WINDOW_HEIGHT);
+   viewport.MinDepth = 0.0f;  // 深度バッファの最小値（通常0.0）
+   viewport.MaxDepth = 1.0f;  // 深度バッファの最大値（通常1.0）
+
+   // ビューポートの設定はDeviceContext（描画コマンド担当）に対して行う
+   g_deviceContext->RSSetViewports(1, &viewport);
+
+   return true;
+}
+
+// ============================================================
+// Render — 毎フレームの描画処理
+// ============================================================
+void Render()
+{
+    // --------------------------------------------------------
+    // 1. レンダーターゲットの設定
+    // --------------------------------------------------------
+    // 「これから描画する先はこのレンダーターゲットですよ」とDeviceContextに伝える。
+    // 毎フレーム設定するのが安全（他の処理で変更される可能性があるため）。
+    //
+    // 第1引数: レンダーターゲットの数（通常は1）
+    // 第2引数: レンダーターゲットビューの配列（今は1つだけ）
+    // 第3引数: 深度ステンシルビュー（今はまだ使わないのでnullptr）
+    g_deviceContext->OMSetRenderTargets(
+        1,
+        g_renderTargetView.GetAddressOf(),
+        nullptr
+    );
+
+    // --------------------------------------------------------
+    // 2. 画面のクリア（塗りつぶし）
+    // --------------------------------------------------------
+    // ClearRenderTargetView は指定した色でレンダーターゲット全体を塗りつぶす。
+    // RGBA（赤、緑、青、アルファ）の4つのfloat値で色を指定する。
+    // 各値は 0.0f 〜 1.0f の範囲。
+    //
+    // コーンフラワーブルー (0.392f, 0.584f, 0.929f) はXNAやMonoGameで
+    // おなじみのデフォルト背景色。DirectXの画面が表示されたことが一目でわかる。
+    float clearColor[4] = { 0.392f, 0.584f, 0.929f, 1.0f };
+    g_deviceContext->ClearRenderTargetView(g_renderTargetView.Get(), clearColor);
+
+    // --------------------------------------------------------
+    // 3. バックバッファをフロントバッファに切り替える（画面に表示）
+    // --------------------------------------------------------
+    // Present() を呼ぶことで、バックバッファの内容が実際に画面に表示される。
+    //
+    // 第1引数: 垂直同期（VSync）の設定
+    //   0 = VSync無効（可能な限り高速に描画、ティアリングの可能性あり）
+    //   1 = VSync有効（モニターのリフレッシュレートに同期、通常60fps上限）
+    //   今は1（VSync有効）にする。開発中はティアリングを防げるので見た目が安定する。
+    //
+    // 第2引数: プレゼントフラグ（通常は0）
+    g_swapChain->Present(1, 0);
+}
 
 // ============================================================
 // WinMain — Win32アプリケーションのエントリポイント
@@ -110,6 +341,14 @@ int WINAPI WinMain(
     UpdateWindow(hwnd);
 
     // --------------------------------------------------------
+    // DirectX11の初期化
+    // --------------------------------------------------------
+    if (!InitD3D(hwnd))
+    {
+        return -1;
+    }
+
+    // --------------------------------------------------------
     // タイマーの初期化
     // --------------------------------------------------------
     // QueryPerformanceCounter は CPU の高精度タイマーを読む関数。
@@ -159,8 +398,8 @@ int WINAPI WinMain(
             // Update（今は空）
             // TODO: ゲームロジックの更新
 
-            // Render（今は空）
-            // TODO: DirectXによる描画（Day 3〜4で実装）
+            // Render
+            Render();
 
             // FPS表示
             fpsTimer += deltaTime;
