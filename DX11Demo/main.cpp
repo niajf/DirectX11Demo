@@ -312,6 +312,113 @@ bool  InitD3D(HWND hwnd)
    );
    if (FAILED(hr)) return false;
 
+   // --------------------------------------------------------
+   // 入力レイアウトの作成
+   // --------------------------------------------------------
+   // D3D11_INPUT_ELEMENT_DESC の配列で、頂点の各フィールドを記述する。
+   //
+   // 各フィールドの意味:
+   //   SemanticName:      HLSLのセマンティクス名（"POSITION", "COLOR"）
+   //   SemanticIndex:     同名セマンティクスが複数ある場合のインデックス（通常0）
+   //   Format:            データ型（DXGI_FORMAT_R32G32B32_FLOAT = float3）
+   //   InputSlot:         頂点バッファのスロット番号（通常0）
+   //   AlignedByteOffset: 構造体の先頭からのバイトオフセット
+   //                      D3D11_APPEND_ALIGNED_ELEMENT で自動計算もできる
+   //   InputSlotClass:    頂点ごと（PER_VERTEX_DATA）かインスタンスごとか
+   //   InstanceDataStepRate: インスタンシング用（0 = 使わない）
+   D3D11_INPUT_ELEMENT_DESC layoutDesc[] =
+   {
+       {
+           "POSITION",                      // SemanticName — HLSL側の : POSITION に対応
+           0,                               // SemanticIndex
+           DXGI_FORMAT_R32G32B32_FLOAT,     // Format — XMFLOAT3 = float x 3
+           0,                               // InputSlot
+           0,                               // Format — XMFLOAT3 = float x 3
+           D3D11_INPUT_PER_VERTEX_DATA,     // InputSlotClass
+           0                                // InstanceDataStepRate
+       },
+       {
+           "COLOR",                         // SemanticName — HLSL側の : COLOR に対応  
+           0,                               // SemanticIndex
+           DXGI_FORMAT_R32G32B32A32_FLOAT,  // Format — XMFLOAT4 = float x 4
+           0,                               // InputSlot
+           12,                              // AlignedByteOffset — XMFLOAT3のあと = 12バイト
+                                            // D3D11_APPEND_ALIGNED_ELEMENT を使うと自動で計算してくれる
+           D3D11_INPUT_PER_VERTEX_DATA,     // InputSlotClass
+           0                                // InstanceDataStepRate
+       },
+   };
+
+   // 入力レイアウトの作成
+   // 頂点シェーダーのコンパイル結果（vsBlob）が必要 — シェーダーの入力と
+   // レイアウト定義が一致していることを検証するため
+   hr = g_device->CreateInputLayout(
+       layoutDesc,                      // レイアウト記述の配列
+       _countof(layoutDesc),            // 要素数
+       vsBlob->GetBufferPointer(),      // 頂点シェーダーのバイトコード
+       vsBlob->GetBufferSize(),         // バイトコードのサイズ
+       g_inputLayout.GetAddressOf()     // [出力」入力レイアウト
+   );
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"入力レイアウトの作成に失敗", L"エラー", MB_OK);
+       return false;
+   }  
+
+
+   // --------------------------------------------------------
+   // 6. 頂点データの定義と頂点バッファの作成
+   // --------------------------------------------------------
+
+   // 三角形の3頂点を定義する。
+   //
+   // 座標系について:
+   //   今回は行列変換をしない（頂点シェーダーがそのまま出力する）ので、
+   //   「クリップ空間」の座標を直接指定する。
+   //   クリップ空間は以下の範囲:
+   //     X: -1.0（左端）〜 +1.0（右端）
+   //     Y: -1.0（下端）〜 +1.0（上端）
+   //     Z:  0.0（最も手前）〜 +1.0（最も奥）
+   //
+   // 頂点の順番（ワインディングオーダー）:
+   //   DirectXは**時計回り**が表面（フロントフェイス）。
+   //   反時計回りだと裏面と見なされ、カリングで描画されない。
+
+   Vertex vertices[] =
+   {
+       //        位置 (x,    y,    z)      色 (r,   g,   b,   a)
+       // 三角形1（左上半分）
+       { XMFLOAT3(-0.5f,  0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },
+       { XMFLOAT3(0.5f,  0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },
+       { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },
+       // 三角形2（右下半分）
+       { XMFLOAT3(0.5f,  0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },
+       { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
+       { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },
+   };
+
+   // 頂点バッファの設定
+   // D3D11_BUFFER_DESC は「こういうバッファが欲しい」という注文書。
+   D3D11_BUFFER_DESC bufferDesc = {};
+   bufferDesc.Usage = D3D11_USAGE_DEFAULT;              // GPUから読み書き可能
+   bufferDesc.ByteWidth = sizeof(vertices);            // バッファのサイズ
+   bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;     // 頂点バッファとして使う
+   bufferDesc.CPUAccessFlags = 0;                       // CPUからはアクセスしない
+
+   // D3D11_SUBRESOURCE_DATA はバッファに最初に入れるデータの指定。
+   // pSysMem に頂点配列のポインタを渡す。
+   D3D11_SUBRESOURCE_DATA initData = {};
+   initData.pSysMem = vertices;
+
+   // バッファを作成（Device が担当）
+   hr = g_device->CreateBuffer(&bufferDesc, &initData, g_vertexBuffer.GetAddressOf());
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"頂点バッファの作成に失敗", L"エラー", MB_OK);
+       return false;
+   }
+
+
    return true;
 }
 
@@ -340,12 +447,46 @@ void Render()
     // --------------------------------------------------------
     // ClearRenderTargetView は指定した色でレンダーターゲット全体を塗りつぶす。
     // RGBA（赤、緑、青、アルファ）の4つのfloat値で色を指定する。
-    // 各値は 0.0f 〜 1.0f の範囲。
-    //
-    // コーンフラワーブルー (0.392f, 0.584f, 0.929f) はXNAやMonoGameで
-    // おなじみのデフォルト背景色。DirectXの画面が表示されたことが一目でわかる。
-    float clearColor[4] = { 0.392f, 0.584f, 0.929f, 1.0f };
+    // 各値は 0.0f 〜 1.0f の範囲
+    float clearColor[4] = { 0.1f, 0.14f, 0.15f, 1.0f };
     g_deviceContext->ClearRenderTargetView(g_renderTargetView.Get(), clearColor);
+
+    // --------------------------------------------------------
+    // パイプラインの設定（描画前に毎回行う）
+    // --------------------------------------------------------
+
+    // (1)入力アセンブラの設定
+    // 「頂点データの読み方はこうだよ」とGPUに伝える
+
+    // 入力レイアウトの設定
+	g_deviceContext->IASetInputLayout(g_inputLayout.Get());
+
+    // 頂点バッファをInput Assemblerにバインド
+	UINT stride = sizeof(Vertex);   // 頂点1つ分のサイズ
+    UINT offset = 0;                // 読み開始位置のオフセット
+    g_deviceContext->IASetVertexBuffers(
+        0,                              // スロット番号（入力レイアウトのInputSlotに対応）
+        1,                              // バインドするバッファの数
+        g_vertexBuffer.GetAddressOf(),  // バッファの配列
+        &stride,                        // ストライドの配列
+        &offset                        // オフセットの配列
+    );
+
+    // プリミティブトポロジーの設定
+    // 「頂点を3つずつグループにして三角形として描け」という指示
+	g_deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    //(2) シェーダーの設定
+    g_deviceContext->VSSetShader(g_vertexShader.Get(), nullptr, 0);
+    g_deviceContext->PSSetShader(g_pixelShader.Get(), nullptr, 0);
+
+    // --------------------------------------------------------
+    // 描画コマンドの発行
+    // --------------------------------------------------------
+    // Draw(頂点数, 開始頂点のインデックス)
+    // 3頂点 = 1つの三角形
+	g_deviceContext->Draw(6, 0);
+
 
     // --------------------------------------------------------
     // 3. バックバッファをフロントバッファに切り替える（画面に表示）

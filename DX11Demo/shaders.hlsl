@@ -52,5 +52,9 @@ PSInput vs_main(VSInput input)
 // SV_TARGET は「この値をレンダーターゲットに書き込め」を意味する。
 float4 ps_main(PSInput input) : SV_TARGET
 {
-	return input.color;
+    return input.color;
+	
+	// 頂点色を無視して、常に黄色で描画する
+    // return float4(1.0f, 1.0f, 0.0f, 1.0f);
+
 }
