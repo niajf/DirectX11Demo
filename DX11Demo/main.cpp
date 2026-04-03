@@ -44,6 +44,15 @@ ComPtr<ID3D11InputLayout> g_inputLayout;
 // ---- 頂点バッファ ----
 ComPtr<ID3D11Buffer> g_vertexBuffer;
 
+// ---- 定数バッファ ----
+ComPtr<ID3D11Buffer> g_constantBuffer;
+
+// ----　インデックスバッファ ----
+ComPtr<ID3D11Buffer> g_indexBuffer;
+
+// ---- 深度バッファ ----
+ComPtr<ID3D11DepthStencilView> g_depthStencilView;
+
 // ウィンドウプロシージャの前方宣言
 // OSからのメッセージ（キー入力、マウス、閉じるボタン等）を処理するコールバック関数
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -62,6 +71,19 @@ struct Vertex
     XMFLOAT4 color;     // 色（r, g, b, a）
 };
 
+// ============================================================
+// 定数バッファ構造体
+// ============================================================
+// HLSL側の cbuffer と完全にメモリレイアウトが一致する必要がある。
+//
+// 重要: 定数バッファは16バイトアライメントが必須。
+// XMMATRIX は 64バイト（float 4x4 = 16 float = 64バイト）で、
+// 16バイトの倍数なので問題ない。
+// もし float や int を追加する場合は、パディングに注意すること。
+struct alignas(16) ConstantBuffer
+{
+    XMMATRIX wvp;   // ワールド * ビュー * プロジェクション行列
+};
 
 // ============================================================
 // CompileShader — HLSLファイルをコンパイルする汎用関数
@@ -259,6 +281,31 @@ bool  InitD3D(HWND hwnd)
    }
 
    // --------------------------------------------------------
+   // 深度バッファの作成
+   // --------------------------------------------------------
+
+   //(a) 深度テクスチャの作成
+   D3D11_TEXTURE2D_DESC depthDesc = {};
+   depthDesc.Width = WINDOW_WIDTH;
+   depthDesc.Height = WINDOW_HEIGHT;
+   depthDesc.MipLevels = 1;
+   depthDesc.ArraySize = 1;
+   depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; // 24ビット深度 + 8ビットステンシル
+   depthDesc.SampleDesc.Count = 1;
+   depthDesc.SampleDesc.Quality = 0;
+   depthDesc.Usage = D3D11_USAGE_DEFAULT;
+   depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+
+   ComPtr<ID3D11Texture2D> depthTexture;
+   hr = g_device->CreateTexture2D(&depthDesc, nullptr, depthTexture.GetAddressOf());
+   if (FAILED(hr)) return false;
+
+   //(b) 深度ステンシルビューの作成
+   hr = g_device->CreateDepthStencilView(
+       depthTexture.Get(), nullptr, g_depthStencilView.GetAddressOf());
+   if (FAILED(hr)) return false;
+
+   // --------------------------------------------------------
    // 4. ビューポートの設定
    // --------------------------------------------------------
    // ビューポートは「描画結果をウィンドウのどの範囲に表示するか」を定義する。
@@ -363,7 +410,25 @@ bool  InitD3D(HWND hwnd)
    {
        MessageBox(nullptr, L"入力レイアウトの作成に失敗", L"エラー", MB_OK);
        return false;
-   }  
+   }
+
+   // --------------------------------------------------------
+   // 定数バッファの作成
+   // --------------------------------------------------------
+   // 頂点バッファと同じ CreateBuffer() で作るが、
+   // BindFlags が D3D11_BIND_CONSTANT_BUFFER になる。
+   // 初期データは渡さない（毎フレーム UpdateSubresource で更新するため）。
+   D3D11_BUFFER_DESC cbDesc = {};
+   cbDesc.Usage = D3D11_USAGE_DEFAULT;
+   cbDesc.ByteWidth = sizeof(ConstantBuffer);
+   cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+   hr = g_device->CreateBuffer(&cbDesc, nullptr, g_constantBuffer.GetAddressOf());
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"定数バッファの作成に失敗", L"エラー", MB_OK);
+       return false;
+   }
 
 
    // --------------------------------------------------------
@@ -384,17 +449,31 @@ bool  InitD3D(HWND hwnd)
    //   DirectXは**時計回り**が表面（フロントフェイス）。
    //   反時計回りだと裏面と見なされ、カリングで描画されない。
 
+   // ============================================================
+   // キューブの頂点データ（8頂点）
+   // ============================================================
+   //
+   //       4 -------- 5
+   //      /|         /|
+   //     / |        / |
+   //    0 -------- 1  |
+   //    |  7 ------|- 6
+   //    | /        | /
+   //    |/         |/
+   //    3 -------- 2
+   //
+
    Vertex vertices[] =
    {
        //        位置 (x,    y,    z)      色 (r,   g,   b,   a)
-       // 三角形1（左上半分）
-       { XMFLOAT3(-0.5f,  0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },
-       { XMFLOAT3(0.5f,  0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },
-       { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },
-       // 三角形2（右下半分）
-       { XMFLOAT3(0.5f,  0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },
-       { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) },
-       { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },
+       { XMFLOAT3(-0.5f,  0.5f, -0.5f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }, // 0: 左上手前 赤
+       { XMFLOAT3(0.5f,  0.5f, -0.5f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) }, // 1: 右上手前 緑
+       { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) }, // 2: 右下手前 青
+       { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f) }, // 3: 左下手前 黄
+       { XMFLOAT3(-0.5f,  0.5f,  0.5f), XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f) }, // 4: 左上奥   マゼンタ
+       { XMFLOAT3(0.5f,  0.5f,  0.5f), XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f) }, // 5: 右上奥   シアン
+       { XMFLOAT3(0.5f, -0.5f,  0.5f), XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) }, // 6: 右下奥   白
+       { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f) }, // 7: 左下奥   灰
    };
 
    // 頂点バッファの設定
@@ -418,6 +497,45 @@ bool  InitD3D(HWND hwnd)
        return false;
    }
 
+   // ============================================================
+   // インデックスデータ（12三角形 = 36インデックス）
+   // ============================================================
+   // 各面を2つの三角形に分割する。
+   // 時計回り（正面から見て）がフロントフェイス。
+   UINT indices[] =
+   {
+       // 前面
+       0, 1, 2,
+       0, 2, 3,
+       // 背面
+       5, 4, 7,
+       5, 7, 6,
+       // 上面
+       4, 5, 1,
+       4, 1, 0,
+       // 底面
+       3, 2, 6,
+       3, 6, 7,
+       // 左面
+       4, 0, 3,
+       4, 3, 7,
+       // 右面
+       1, 5, 6,
+       1, 6, 2,
+   };
+
+   // インデックスバッファの作成
+   D3D11_BUFFER_DESC ibDesc = {};
+   ibDesc.Usage = D3D11_USAGE_DEFAULT;
+   ibDesc.ByteWidth = sizeof(indices);
+   ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+   D3D11_SUBRESOURCE_DATA ibData = {};
+   ibData.pSysMem = indices;
+
+   hr = g_device->CreateBuffer(&ibDesc, &ibData, g_indexBuffer.GetAddressOf());
+   if (FAILED(hr)) return false;
+
 
    return true;
 }
@@ -425,7 +543,7 @@ bool  InitD3D(HWND hwnd)
 // ============================================================
 // Render — 毎フレームの描画処理
 // ============================================================
-void Render()
+void Render(float deltaTime)
 {
     // --------------------------------------------------------
     // 1. レンダーターゲットの設定
@@ -439,7 +557,7 @@ void Render()
     g_deviceContext->OMSetRenderTargets(
         1,
         g_renderTargetView.GetAddressOf(),
-        nullptr
+		g_depthStencilView.Get()
     );
 
     // --------------------------------------------------------
@@ -448,8 +566,64 @@ void Render()
     // ClearRenderTargetView は指定した色でレンダーターゲット全体を塗りつぶす。
     // RGBA（赤、緑、青、アルファ）の4つのfloat値で色を指定する。
     // 各値は 0.0f 〜 1.0f の範囲
-    float clearColor[4] = { 0.1f, 0.14f, 0.15f, 1.0f };
+    float clearColor[4] = { 0.1f, 0.1f, 0.15f, 1.0f };
     g_deviceContext->ClearRenderTargetView(g_renderTargetView.Get(), clearColor);
+
+
+    // 深度バッファのクリア（毎フレーム1.0でリセット）
+    // 1.0 は最も遠い深度値。描画されたピクセルはこれより小さい値を持つ。
+    g_deviceContext->ClearDepthStencilView(
+        g_depthStencilView.Get(),
+        D3D11_CLEAR_DEPTH,
+        1.0f,  // 深度の初期値
+        0      // ステンシルの初期値
+    );
+
+    // --------------------------------------------------------
+    // WVP行列の計算
+    // --------------------------------------------------------
+
+    // 回転角度（毎フレーム増加させる）
+    static float angle = 0.0f;
+
+    angle += deltaTime * 1.0f;
+
+    // ワールド行列: Y軸で回転
+    // 1つ目のキューブ（左側）
+    XMMATRIX world = XMMatrixRotationY(angle);
+
+
+    // ビュー行列: カメラの設定
+    XMVECTOR eye = XMVectorSet(0.0f, 1.5f, -3.0f, 0.0f);    // カメラの位置
+    XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);  // 注視点
+    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);      // 上方向
+	XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
+
+    // プロジェクション行列: 投資投影
+	constexpr float fov = XMConvertToRadians(60.0f);                                                  // 視野角60度
+	float aspect = static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT);    // アスペクト比
+    float nearZ = 0.1f;                                                                     // ニアクリップ面
+    float farZ = 100.0f;                                                                    // ファークリップ面
+    XMMATRIX projection = XMMatrixPerspectiveFovLH(fov, aspect, nearZ, farZ);
+
+	// WVP行列 = ワールド x ビュー x プロジェクション
+    XMMATRIX wvp = world * view * projection;
+
+    // --------------------------------------------------------
+    // 定数バッファの更新
+    // --------------------------------------------------------
+    // 重要: DirectXMathは行優先(row-major)、HLSLはデフォルトで列優先(column-major)。
+    // mul() が正しく動作するように、行列を転置してから渡す
+	ConstantBuffer cb;
+	cb.wvp = XMMatrixTranspose(wvp);
+
+    // UpdateSubresource でGPU上の定数バッファを更新する
+	g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
+
+    // 定数バッファを頂点シェーダーのスロット0に設定
+    // register(b0) に対応する
+    g_deviceContext->VSSetConstantBuffers(0, 1, g_constantBuffer.GetAddressOf());
+
 
     // --------------------------------------------------------
     // パイプラインの設定（描画前に毎回行う）
@@ -472,6 +646,8 @@ void Render()
         &offset                        // オフセットの配列
     );
 
+    g_deviceContext->IASetIndexBuffer(g_indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+
     // プリミティブトポロジーの設定
     // 「頂点を3つずつグループにして三角形として描け」という指示
 	g_deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -483,10 +659,11 @@ void Render()
     // --------------------------------------------------------
     // 描画コマンドの発行
     // --------------------------------------------------------
-    // Draw(頂点数, 開始頂点のインデックス)
-    // 3頂点 = 1つの三角形
-	g_deviceContext->Draw(6, 0);
-
+    // DrawIndexed に変更（Draw → DrawIndexed）
+    // 第1引数: インデックスの総数（36 = 12三角形 × 3頂点）
+    // 第2引数: 開始インデックスのオフセット
+    // 第3引数: 頂点のベースオフセット
+    g_deviceContext->DrawIndexed(36, 0, 0);
 
     // --------------------------------------------------------
     // 3. バックバッファをフロントバッファに切り替える（画面に表示）
@@ -651,7 +828,7 @@ int WINAPI WinMain(
             // TODO: ゲームロジックの更新
 
             // Render
-            Render();
+            Render(deltaTime);
 
             // FPS表示
             fpsTimer += deltaTime;
