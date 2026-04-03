@@ -14,16 +14,17 @@
 // ----- DirectX11 -----
 #include <d3d11.h>          // D3D11のコアAPI
 #include <dxgi.h >          // DXGI(ディスプレイ関連)
+#include <d3dcompiler.h>   // シェーダーコンパイラ
 #include <wrl/client.h>     // ComPtr
+#include <DirectXMath.h> 
 
 // ライブラリのリンク
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 
-
-// ComPtrを短く書くためのusing宣言
 using Microsoft::WRL::ComPtr;
-
+using namespace DirectX;
 
 // ウィンドウのサイズ（後でDirectXのバックバッファサイズと合わせる）
 constexpr int WINDOW_WIDTH = 1280;
@@ -35,9 +36,81 @@ ComPtr<ID3D11DeviceContext> g_deviceContext;        // 描画コマンド担当
 ComPtr<IDXGISwapChain> g_swapChain;                 // ダブルバッファリング
 ComPtr<ID3D11RenderTargetView> g_renderTargetView;  // 描画先の指定
 
+// ---- シェーダー ----
+ComPtr<ID3D11VertexShader> g_vertexShader;
+ComPtr<ID3D11PixelShader> g_pixelShader;
+ComPtr<ID3D11InputLayout> g_inputLayout;
+
+// ---- 頂点バッファ ----
+ComPtr<ID3D11Buffer> g_vertexBuffer;
+
 // ウィンドウプロシージャの前方宣言
 // OSからのメッセージ（キー入力、マウス、閉じるボタン等）を処理するコールバック関数
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+// ============================================================
+// 頂点構造体
+// ============================================================
+// GPU側のHLSL構造体（VSInput）と完全に対応する。
+// メモリ上のレイアウトが一致していなければならない。
+//
+// XMFLOAT3 = float x 3 (12バイト) — HLSLの float3 に対応
+// XMFLOAT4 = float x 4 (16バイト) — HLSLの float4 に対応
+struct Vertex
+{
+    XMFLOAT3 position;  // 位置（x, y, z）
+    XMFLOAT4 color;     // 色（r, g, b, a）
+};
+
+
+// ============================================================
+// CompileShader — HLSLファイルをコンパイルする汎用関数
+// ============================================================
+// filePath:   HLSLファイルのパス（例: L"shaders.hlsl"）
+// entryPoint: エントリポイント関数名（例: "vs_main"）
+// profile:    シェーダーモデル（例: "vs_5_0" または "ps_5_0"）
+// blob:       [出力] コンパイル結果のバイナリデータ
+// ============================================================
+bool CompileShader(
+    const wchar_t* filePath,
+    const char* entryPoint,
+    const char* profile,
+    ComPtr<ID3DBlob>& blob)
+{
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+# ifdef _DEBUG
+    compileFlags |= D3DCOMPILE_DEBUG;
+    compileFlags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    ComPtr<ID3DBlob> errorBlob;
+
+    HRESULT hr = D3DCompileFromFile(
+        filePath,                           // HLSLファイルのパス
+        nullptr,                            // マクロ定義（なし）
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,  // #includeの標準ハンドラ
+        entryPoint,                         //  エントリポイント関数名
+        profile,                            // シェーダーモデル
+        compileFlags,                       // コンパイルフラグ
+        0,                                  // エフェクトフラグ(0)
+        blob.GetAddressOf(),                // [出力] コンパイル結果
+        errorBlob.GetAddressOf()            // [出力] エラーメッセージ
+    );
+
+    // コンパイルエラーがあれば出力ウィンドウに表示
+    if (FAILED(hr))
+    {
+        if (errorBlob)
+        {
+            OutputDebugStringA(
+                static_cast<const char*>(errorBlob->GetBufferPointer())
+            );
+        }
+        return false;
+    }
+
+    return true;
+}
 
 
 // ============================================================
@@ -200,6 +273,44 @@ bool  InitD3D(HWND hwnd)
 
    // ビューポートの設定はDeviceContext（描画コマンド担当）に対して行う
    g_deviceContext->RSSetViewports(1, &viewport);
+
+   // --------------------------------------------------------
+   // 5. シェーダーのコンパイルと生成
+   // --------------------------------------------------------
+
+   // (a) 頂点シェーダーのコンパイル
+   ComPtr<ID3DBlob> vsBlob;
+   if (!CompileShader(L"shaders.hlsl", "vs_main", "vs_5_0", vsBlob))
+   {
+       MessageBox(nullptr, L"頂点シェーダーのコンパイルに失敗", L"エラー", MB_OK);
+       return false;
+   }
+
+   // コンパイル結果から頂点シェーダーオブジェクトを生成
+   hr = g_device->CreateVertexShader(
+       vsBlob->GetBufferPointer(),  // コンパイル済みバイトコード
+       vsBlob->GetBufferSize(),     // バイトコードのサイズ
+       nullptr,                     // クラスリンケージ（使わない）
+       g_vertexShader.GetAddressOf()
+   );
+   if (FAILED(hr)) return false;
+
+   // (b) ピクセルシェーダーのコンパイル
+   ComPtr<ID3DBlob> psBlob;
+   if (!CompileShader(L"shaders.hlsl", "ps_main", "ps_5_0", psBlob))
+   {
+       MessageBox(nullptr, L"ピクセルシェーダーのコンパイルに失敗", L"エラー", MB_OK);
+       return false;
+   }
+
+   // コンパイル結果からピクセルシェーダーオブジェクトを生成
+   hr = g_device->CreatePixelShader(
+       psBlob->GetBufferPointer(),
+       psBlob->GetBufferSize(),
+       nullptr,
+       g_pixelShader.GetAddressOf()
+   );
+   if (FAILED(hr)) return false;
 
    return true;
 }
