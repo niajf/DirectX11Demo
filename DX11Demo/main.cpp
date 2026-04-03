@@ -43,15 +43,36 @@ ComPtr<ID3D11InputLayout> g_inputLayout;
 
 // ---- 頂点バッファ ----
 ComPtr<ID3D11Buffer> g_vertexBuffer;
+ComPtr<ID3D11Buffer> g_floorVertexBuffer;
 
 // ---- 定数バッファ ----
 ComPtr<ID3D11Buffer> g_constantBuffer;
 
 // ----　インデックスバッファ ----
 ComPtr<ID3D11Buffer> g_indexBuffer;
+ComPtr<ID3D11Buffer> g_floorIndexBuffer;
 
 // ---- 深度バッファ ----
 ComPtr<ID3D11DepthStencilView> g_depthStencilView;
+
+// ============================================================
+// カメラの状態
+// ============================================================
+XMFLOAT3 g_camPosition = { 0.0f, 1.5f, -3.0f }; // カメラの位置
+float g_camYaw = 0.0f;                          // 左右の回転（ラジアン）
+float g_camPitch = 0.0f;                        // 上下の回転（ラジアン）
+float g_camSpeed = 3.0f;                        // 移動速度（単位/秒）
+float g_mouseSensitivity = 0.002f;              // マウス感度
+
+// ---- キー入力 ----
+bool g_keyW = false;
+bool g_keyA = false;
+bool g_keyS = false;
+bool g_keyD = false;
+
+// ---- マウス入力 ----
+bool g_mouseCaptured = false;   // マウスがキャプチャされているか
+POINT g_lastMousePos = {};      // 前フレームのマウス位置
 
 // ウィンドウプロシージャの前方宣言
 // OSからのメッセージ（キー入力、マウス、閉じるボタン等）を処理するコールバック関数
@@ -476,6 +497,14 @@ bool  InitD3D(HWND hwnd)
        { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f) }, // 7: 左下奥   灰
    };
 
+   Vertex floorVertices[] =
+   {
+       { XMFLOAT3(-10.0f, -0.5f, 10.0f), XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f) },
+       { XMFLOAT3(10.0f, -0.5f, 10.0f), XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f) },
+       { XMFLOAT3(10.0f, -0.5f, -10.0f), XMFLOAT4(0.4f, 0.4f, 0.4f, 1.0f) },
+       { XMFLOAT3(-10.0f, -0.5f, -10.0f), XMFLOAT4(0.4f, 0.4f, 0.4f, 1.0f) },
+   };
+
    // 頂点バッファの設定
    // D3D11_BUFFER_DESC は「こういうバッファが欲しい」という注文書。
    D3D11_BUFFER_DESC bufferDesc = {};
@@ -494,6 +523,16 @@ bool  InitD3D(HWND hwnd)
    if (FAILED(hr))
    {
        MessageBox(nullptr, L"頂点バッファの作成に失敗", L"エラー", MB_OK);
+       return false;
+   }
+
+   // 床頂点バッファの設定
+   bufferDesc.ByteWidth = sizeof(floorVertices);
+   initData.pSysMem = floorVertices;
+   hr = g_device->CreateBuffer(&bufferDesc, &initData, g_floorVertexBuffer.GetAddressOf());
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"床頂点バッファの作成に失敗", L"エラー", MB_OK);
        return false;
    }
 
@@ -524,6 +563,8 @@ bool  InitD3D(HWND hwnd)
        1, 6, 2,
    };
 
+   UINT floorIndices[] = { 0, 1, 2, 0, 2, 3 };
+
    // インデックスバッファの作成
    D3D11_BUFFER_DESC ibDesc = {};
    ibDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -536,8 +577,89 @@ bool  InitD3D(HWND hwnd)
    hr = g_device->CreateBuffer(&ibDesc, &ibData, g_indexBuffer.GetAddressOf());
    if (FAILED(hr)) return false;
 
+   // 床インデックスバッファの作成
+   ibDesc.ByteWidth = sizeof(floorIndices);
+   ibData.pSysMem = floorIndices;
+   hr = g_device->CreateBuffer(&ibDesc, &ibData, g_floorIndexBuffer.GetAddressOf());
+   if (FAILED(hr)) return false;
+
 
    return true;
+}
+
+// ============================================================
+// UpdateCamera — 毎フレームのカメラ状態更新
+// ============================================================
+void UpdateCamera(float deltaTime)
+{
+    // --------------------------------------------------------
+    // マウス入力 → ヨーとピッチの更新
+    // --------------------------------------------------------
+    if (g_mouseCaptured)
+    {
+		POINT currentMousePos;
+		GetCursorPos(&currentMousePos);
+
+        // 前フレームからの移動量
+        float deltaX = static_cast<float>(currentMousePos.x - g_lastMousePos.x);
+        float deltaY = static_cast<float>(currentMousePos.y - g_lastMousePos.y);
+
+        // 移動量に感度を掛けてヨーとピッチを更新
+		g_camYaw += deltaX * g_mouseSensitivity;
+		g_camPitch += deltaY * g_mouseSensitivity;
+
+        // ピッチを制限する（真上・真下を超えないように）
+        // ±89度に制限。90度ちょうどだとforward.yが±1になり、
+        // 外積でrightベクトルが計算できなくなる（ジンバルロック）
+		constexpr float maxPitch = XMConvertToRadians(89.0f);
+        if (g_camPitch > maxPitch) g_camPitch = maxPitch;
+		if (g_camPitch < -maxPitch) g_camPitch = -maxPitch;
+
+        // マウスカーソルを画面中央に戻す
+        // こうすることで、マウスが画面端に到達して動けなくなる問題を防ぐ
+        RECT rect;
+		GetWindowRect(GetForegroundWindow(), &rect);
+		int centerX = (rect.left + rect.right) / 2;
+		int centerY = (rect.top + rect.bottom) / 2;
+		SetCursorPos(centerX, centerY);
+
+        // 「画面中央に戻した位置」を次フレームの基準にする
+		g_lastMousePos.x = centerX;
+		g_lastMousePos.y = centerY;
+    }
+    
+    // --------------------------------------------------------
+    // 1. ヨーとピッチから前方向ベクトルを計算
+    // --------------------------------------------------------
+    // 球面座標 → デカルト座標の変換
+    XMFLOAT3 forward;
+	forward.x = cosf(g_camPitch) * sinf(g_camYaw);
+	forward.y = -sinf(g_camPitch);
+	forward.z = cosf(g_camPitch) * cosf(g_camYaw);
+
+    // XMFLOAT3 → XMVECTOR に変換（DirectXMathの演算にはXMVECTORが必要）
+	XMVECTOR forwardVec = XMVector3Normalize(XMLoadFloat3(&forward));
+
+    // --------------------------------------------------------
+    // 2. 右方向ベクトルを計算（外積）
+    // --------------------------------------------------------
+    // worldUp(0,1,0) と forward の外積で right が求まる
+    XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    XMVECTOR rightVec = XMVector3Normalize(XMVector3Cross(worldUp, forwardVec));
+
+    // --------------------------------------------------------
+    // 3. WASD入力に基づいてカメラ位置を移動
+    // --------------------------------------------------------
+	float speed = g_camSpeed * deltaTime; // フレームレートに依存しない移動量
+	XMVECTOR posVec = XMLoadFloat3(&g_camPosition);
+
+    if (g_keyW) posVec = XMVectorAdd(posVec, XMVectorScale(forwardVec, speed));
+    if (g_keyS) posVec = XMVectorAdd(posVec, XMVectorScale(forwardVec, -speed));
+    if (g_keyD) posVec = XMVectorAdd(posVec, XMVectorScale(rightVec, speed));
+    if (g_keyA) posVec = XMVectorAdd(posVec, XMVectorScale(rightVec, -speed));
+
+    // XMVECTOR → XMFLOAT3 に戻す
+	XMStoreFloat3(&g_camPosition, posVec);
 }
 
 // ============================================================
@@ -590,13 +712,19 @@ void Render(float deltaTime)
 
     // ワールド行列: Y軸で回転
     // 1つ目のキューブ（左側）
-    XMMATRIX world = XMMatrixRotationY(angle);
-
+    //XMMATRIX world = XMMatrixRotationY(angle);
 
     // ビュー行列: カメラの設定
-    XMVECTOR eye = XMVectorSet(0.0f, 1.5f, -3.0f, 0.0f);    // カメラの位置
-    XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);  // 注視点
-    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);      // 上方向
+    // カメラの前方向を計算
+    XMFLOAT3 forward;
+    forward.x = cosf(g_camPitch) * sinf(g_camYaw);
+    forward.y = -sinf(g_camPitch);
+    forward.z = cosf(g_camPitch) * cosf(g_camYaw);
+
+    XMVECTOR eye = XMLoadFloat3(&g_camPosition);        // カメラの位置
+	XMVECTOR forwardVec = XMLoadFloat3(&forward);       // 前方向ベクトル
+    XMVECTOR target = XMVectorAdd(eye, forwardVec);     // 注視点
+    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);  // 上方向
 	XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
 
     // プロジェクション行列: 投資投影
@@ -607,7 +735,7 @@ void Render(float deltaTime)
     XMMATRIX projection = XMMatrixPerspectiveFovLH(fov, aspect, nearZ, farZ);
 
 	// WVP行列 = ワールド x ビュー x プロジェクション
-    XMMATRIX wvp = world * view * projection;
+    //XMMATRIX wvp = world * view * projection;
 
     // --------------------------------------------------------
     // 定数バッファの更新
@@ -615,10 +743,10 @@ void Render(float deltaTime)
     // 重要: DirectXMathは行優先(row-major)、HLSLはデフォルトで列優先(column-major)。
     // mul() が正しく動作するように、行列を転置してから渡す
 	ConstantBuffer cb;
-	cb.wvp = XMMatrixTranspose(wvp);
+	//cb.wvp = XMMatrixTranspose(wvp);
 
     // UpdateSubresource でGPU上の定数バッファを更新する
-	g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
+	//g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
 
     // 定数バッファを頂点シェーダーのスロット0に設定
     // register(b0) に対応する
@@ -663,7 +791,36 @@ void Render(float deltaTime)
     // 第1引数: インデックスの総数（36 = 12三角形 × 3頂点）
     // 第2引数: 開始インデックスのオフセット
     // 第3引数: 頂点のベースオフセット
-    g_deviceContext->DrawIndexed(36, 0, 0);
+    //g_deviceContext->DrawIndexed(36, 0, 0);
+
+    XMFLOAT3 cubePositions[] = {
+    { 0.0f, 0.0f,  0.0f },
+    { 3.0f, 0.0f,  0.0f },
+    {-3.0f, 0.0f,  2.0f },
+    { 0.0f, 0.0f,  5.0f },
+    { 2.0f, 1.0f, -2.0f },
+    };
+
+    for (int i = 0; i < 5; i++)
+    {
+        XMMATRIX cubeWorld = XMMatrixRotationY(angle * (i + 1) * 0.3f)
+            * XMMatrixTranslation(cubePositions[i].x,
+                cubePositions[i].y,
+                cubePositions[i].z);
+        cb.wvp = XMMatrixTranspose(cubeWorld * view * projection);
+        g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
+        g_deviceContext->DrawIndexed(36, 0, 0);
+    }
+
+
+    XMMATRIX floorWorld = XMMatrixIdentity();   // 回転なし
+    XMMATRIX floorWvp = floorWorld * view * projection;
+    cb.wvp = XMMatrixTranspose(floorWvp);
+    g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
+    g_deviceContext->VSSetConstantBuffers(0, 1, g_constantBuffer.GetAddressOf());
+    g_deviceContext->IASetVertexBuffers(0, 1, g_floorVertexBuffer.GetAddressOf(), &stride, &offset);
+    g_deviceContext->IASetIndexBuffer(g_floorIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+    g_deviceContext->DrawIndexed(6, 0, 0);
 
     // --------------------------------------------------------
     // 3. バックバッファをフロントバッファに切り替える（画面に表示）
@@ -828,6 +985,7 @@ int WINAPI WinMain(
             // TODO: ゲームロジックの更新
 
             // Render
+            UpdateCamera(deltaTime);
             Render(deltaTime);
 
             // FPS表示
@@ -871,15 +1029,78 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
     // ESCキーが押された → ウィンドウを閉じる
     case WM_KEYDOWN:
-        if (wParam == VK_ESCAPE)
+        switch (wParam)
         {
-            DestroyWindow(hwnd);
+        case VK_ESCAPE:
+			if (g_mouseCaptured)
+            {
+				// マウスキャプチャを解放
+				g_mouseCaptured = false;
+                ShowCursor(TRUE);
+                ClipCursor(nullptr);
+            }
+            else
+            {
+                DestroyWindow(hwnd); // ウィンドウを破棄 → WM_DESTROYが送られる
+            }
+			break;
+        case 'W':
+			g_keyW = true;
+            break;
+        case 'A':
+            g_keyA = true;
+            break;
+        case 'S':
+            g_keyS = true;
+            break;
+        case 'D':
+            g_keyD = true;
+            break;
+        }
+        return 0;
+    
+    case WM_KEYUP:
+        switch (wParam)
+        {
+        case 'W':
+            g_keyW = false;
+            break;
+        case 'A':
+            g_keyA = false;
+            break;
+        case 'S':
+            g_keyS = false;
+            break;
+        case 'D':
+            g_keyD = false;
+            break;
+        }
+		return 0;
+
+    // ---- 左クリックでマウスキャプチャ開始 ----
+    case WM_LBUTTONDOWN:
+        if (!g_mouseCaptured)
+        {
+            g_mouseCaptured = true;
+			ShowCursor(FALSE); // カーソルを非表示
+
+			// カーソルの移動をウィンドウ内に制限
+            RECT clipRect;
+			GetClientRect(hwnd, &clipRect);                                         // クライアント領域の矩形を取得
+			MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&clipRect), 2); // クライアント座標をスクリーン座標に変換
+			ClipCursor(&clipRect);                                                  // カーソルの移動を矩形内に制限
+
+
+            // 現在位置を記録
+			GetCursorPos(&g_lastMousePos);
         }
         return 0;
 
     // ウィンドウが破棄された → アプリケーション終了をOSに通知
     case WM_DESTROY:
-        PostQuitMessage(0); // メッセージキューにWM_QUITを投入 → GetMessage()が0を返す
+		ClipCursor(nullptr);    // 念のためカーソルの制限を解除
+		ShowCursor(TRUE);       // 念のためカーソルを表示
+        PostQuitMessage(0);     // メッセージキューにWM_QUITを投入 → GetMessage()が0を返す
         return 0;
     }
 
