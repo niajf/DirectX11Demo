@@ -14,14 +14,16 @@
 // ----- DirectX11 -----
 #include <d3d11.h>          // D3D11のコアAPI
 #include <dxgi.h >          // DXGI(ディスプレイ関連)
-#include <d3dcompiler.h>   // シェーダーコンパイラ
+#include <d3dcompiler.h>    // シェーダーコンパイラ
 #include <wrl/client.h>     // ComPtr
 #include <DirectXMath.h> 
+#include "WICTextureLoader.h"
 
 // ライブラリのリンク
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxguid.lib")  // WICTextureLoaderに必要
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -54,6 +56,15 @@ ComPtr<ID3D11Buffer> g_floorIndexBuffer;
 
 // ---- 深度バッファ ----
 ComPtr<ID3D11DepthStencilView> g_depthStencilView;
+
+// ---- テクスチャ ----
+ComPtr<ID3D11ShaderResourceView> g_textureView; // シェーダーに渡すテクスチャビュー
+ComPtr<ID3D11ShaderResourceView> g_floorTextureView; // シェーダーに渡す床用テクスチャビュー
+ComPtr<ID3D11SamplerState> g_sampler;           // テクスチャのサンプリング方法
+
+// ---- ライト ----
+ComPtr<ID3D11Buffer> g_lightBuffer;
+
 
 // ============================================================
 // カメラの状態
@@ -89,7 +100,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 struct Vertex
 {
     XMFLOAT3 position;  // 位置（x, y, z）
-    XMFLOAT4 color;     // 色（r, g, b, a）
+	XMFLOAT3 normal;    // 法線ベクトル（ライティング用）
+    XMFLOAT2 texCoord;  // UV座標（テクスチャ用） 
 };
 
 // ============================================================
@@ -104,6 +116,20 @@ struct Vertex
 struct alignas(16) ConstantBuffer
 {
     XMMATRIX wvp;   // ワールド * ビュー * プロジェクション行列
+    XMMATRIX world; // ライティングようにワールド行列も渡す
+};
+
+// ============================================================
+// ライト用定数バッファ構造体
+// ============================================================
+struct alignas(16) LightBuffer
+{
+    XMFLOAT3 lightDirection; // ライトの方向（ワールド空間）
+    float    padding1;       // 16バイトアライメント用パディング
+    XMFLOAT3 lightColor;     // ライトの色
+    float    padding2;
+    XMFLOAT3 cameraPosition; // カメラの位置（スペキュラ計算用）
+    float    shininess;      // 光沢度
 };
 
 // ============================================================
@@ -405,16 +431,8 @@ bool  InitD3D(HWND hwnd)
            D3D11_INPUT_PER_VERTEX_DATA,     // InputSlotClass
            0                                // InstanceDataStepRate
        },
-       {
-           "COLOR",                         // SemanticName — HLSL側の : COLOR に対応  
-           0,                               // SemanticIndex
-           DXGI_FORMAT_R32G32B32A32_FLOAT,  // Format — XMFLOAT4 = float x 4
-           0,                               // InputSlot
-           12,                              // AlignedByteOffset — XMFLOAT3のあと = 12バイト
-                                            // D3D11_APPEND_ALIGNED_ELEMENT を使うと自動で計算してくれる
-           D3D11_INPUT_PER_VERTEX_DATA,     // InputSlotClass
-           0                                // InstanceDataStepRate
-       },
+       {"NORMAL",0,DXGI_FORMAT_R32G32B32_FLOAT,0,12,D3D11_INPUT_PER_VERTEX_DATA,0},
+       {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D11_INPUT_PER_VERTEX_DATA,0}
    };
 
    // 入力レイアウトの作成
@@ -486,23 +504,49 @@ bool  InitD3D(HWND hwnd)
 
    Vertex vertices[] =
    {
-       //        位置 (x,    y,    z)      色 (r,   g,   b,   a)
-       { XMFLOAT3(-0.5f,  0.5f, -0.5f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }, // 0: 左上手前 赤
-       { XMFLOAT3(0.5f,  0.5f, -0.5f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) }, // 1: 右上手前 緑
-       { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) }, // 2: 右下手前 青
-       { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(1.0f, 1.0f, 0.0f, 1.0f) }, // 3: 左下手前 黄
-       { XMFLOAT3(-0.5f,  0.5f,  0.5f), XMFLOAT4(1.0f, 0.0f, 1.0f, 1.0f) }, // 4: 左上奥   マゼンタ
-       { XMFLOAT3(0.5f,  0.5f,  0.5f), XMFLOAT4(0.0f, 1.0f, 1.0f, 1.0f) }, // 5: 右上奥   シアン
-       { XMFLOAT3(0.5f, -0.5f,  0.5f), XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f) }, // 6: 右下奥   白
-       { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f) }, // 7: 左下奥   灰
+       // ---- 前面 (法線: 0, 0, -1) ----
+        { XMFLOAT3(-0.5f,  0.5f, -0.5f), XMFLOAT3(0,0,-1), XMFLOAT2(0, 0) },
+        { XMFLOAT3(0.5f,  0.5f, -0.5f), XMFLOAT3(0,0,-1), XMFLOAT2(1, 0) },
+        { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0,0,-1), XMFLOAT2(1, 1) },
+        { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0,0,-1), XMFLOAT2(0, 1) },
+
+        // ---- 背面 (法線: 0, 0, 1) ----
+        { XMFLOAT3(0.5f,  0.5f,  0.5f), XMFLOAT3(0,0,1), XMFLOAT2(0, 0) },
+        { XMFLOAT3(-0.5f,  0.5f,  0.5f), XMFLOAT3(0,0,1), XMFLOAT2(1, 0) },
+        { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT3(0,0,1), XMFLOAT2(1, 1) },
+        { XMFLOAT3(0.5f, -0.5f,  0.5f), XMFLOAT3(0,0,1), XMFLOAT2(0, 1) },
+
+        // ---- 上面 (法線: 0, 1, 0) ----
+        { XMFLOAT3(-0.5f,  0.5f,  0.5f), XMFLOAT3(0,1,0), XMFLOAT2(0, 0) },
+        { XMFLOAT3(0.5f,  0.5f,  0.5f), XMFLOAT3(0,1,0), XMFLOAT2(1, 0) },
+        { XMFLOAT3(0.5f,  0.5f, -0.5f), XMFLOAT3(0,1,0), XMFLOAT2(1, 1) },
+        { XMFLOAT3(-0.5f,  0.5f, -0.5f), XMFLOAT3(0,1,0), XMFLOAT2(0, 1) },
+
+        // ---- 底面 (法線: 0, -1, 0) ----
+        { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0,-1,0), XMFLOAT2(0, 0) },
+        { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0,-1,0), XMFLOAT2(1, 0) },
+        { XMFLOAT3(0.5f, -0.5f,  0.5f), XMFLOAT3(0,-1,0), XMFLOAT2(1, 1) },
+        { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT3(0,-1,0), XMFLOAT2(0, 1) },
+
+        // ---- 左面 (法線: -1, 0, 0) ----
+        { XMFLOAT3(-0.5f,  0.5f,  0.5f), XMFLOAT3(-1,0,0), XMFLOAT2(0, 0) },
+        { XMFLOAT3(-0.5f,  0.5f, -0.5f), XMFLOAT3(-1,0,0), XMFLOAT2(1, 0) },
+        { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(-1,0,0), XMFLOAT2(1, 1) },
+        { XMFLOAT3(-0.5f, -0.5f,  0.5f), XMFLOAT3(-1,0,0), XMFLOAT2(0, 1) },
+
+        // ---- 右面 (法線: 1, 0, 0) ----
+        { XMFLOAT3(0.5f,  0.5f, -0.5f), XMFLOAT3(1,0,0), XMFLOAT2(0, 0) },
+        { XMFLOAT3(0.5f,  0.5f,  0.5f), XMFLOAT3(1,0,0), XMFLOAT2(1, 0) },
+        { XMFLOAT3(0.5f, -0.5f,  0.5f), XMFLOAT3(1,0,0), XMFLOAT2(1, 1) },
+        { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(1,0,0), XMFLOAT2(0, 1) },
    };
 
    Vertex floorVertices[] =
    {
-       { XMFLOAT3(-10.0f, -0.5f, 10.0f), XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f) },
-       { XMFLOAT3(10.0f, -0.5f, 10.0f), XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f) },
-       { XMFLOAT3(10.0f, -0.5f, -10.0f), XMFLOAT4(0.4f, 0.4f, 0.4f, 1.0f) },
-       { XMFLOAT3(-10.0f, -0.5f, -10.0f), XMFLOAT4(0.4f, 0.4f, 0.4f, 1.0f) },
+       { XMFLOAT3(-10, -0.5f, -10), XMFLOAT3(0,1,0), XMFLOAT2(0,  0) },
+       { XMFLOAT3(10, -0.5f, -10), XMFLOAT3(0,1,0), XMFLOAT2(10,  0) },
+       { XMFLOAT3(10, -0.5f,  10), XMFLOAT3(0,1,0), XMFLOAT2(10, 10) },
+       { XMFLOAT3(-10, -0.5f,  10), XMFLOAT3(0,1,0), XMFLOAT2(0, 10) }
    };
 
    // 頂点バッファの設定
@@ -543,27 +587,15 @@ bool  InitD3D(HWND hwnd)
    // 時計回り（正面から見て）がフロントフェイス。
    UINT indices[] =
    {
-       // 前面
-       0, 1, 2,
-       0, 2, 3,
-       // 背面
-       5, 4, 7,
-       5, 7, 6,
-       // 上面
-       4, 5, 1,
-       4, 1, 0,
-       // 底面
-       3, 2, 6,
-       3, 6, 7,
-       // 左面
-       4, 0, 3,
-       4, 3, 7,
-       // 右面
-       1, 5, 6,
-       1, 6, 2,
+        0,  1,  2,   0,  2,  3,  // 前面
+        4,  5,  6,   4,  6,  7,  // 背面
+        8,  9, 10,   8, 10, 11,  // 上面
+       12, 13, 14,  12, 14, 15,  // 底面
+       16, 17, 18,  16, 18, 19,  // 左面
+       20, 21, 22,  20, 22, 23,  // 右面
    };
 
-   UINT floorIndices[] = { 0, 1, 2, 0, 2, 3 };
+   UINT floorIndices[] = { 0, 2, 1, 0, 3, 2 };
 
    // インデックスバッファの作成
    D3D11_BUFFER_DESC ibDesc = {};
@@ -584,6 +616,73 @@ bool  InitD3D(HWND hwnd)
    if (FAILED(hr)) return false;
 
 
+   // --------------------------------------------------------
+   // テクスチャの読み込み
+   // --------------------------------------------------------
+   // CreateWICTextureFromFile は画像ファイルからテクスチャとSRVを一度に作る。
+   // 第2引数にDeviceContextを渡すとミップマップが自動生成される。
+   hr = DirectX::CreateWICTextureFromFile(
+       g_device.Get(),
+       g_deviceContext.Get(),   // nullptrにするとみっぷマップなし
+       L"textures/crate.png",   //　画像ファイルのパス
+       nullptr,                 // テクスチャリソース(SRVだけ必要なのでnullptr)
+       g_textureView.GetAddressOf()
+   );
+
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"テクスチャの読み込みに失敗", L"エラー", MB_OK);
+	   return false;
+   }
+
+   hr = DirectX::CreateWICTextureFromFile(
+       g_device.Get(),
+       g_deviceContext.Get(),   // nullptrにするとみっぷマップなし
+       L"textures/floor.png",   //　画像ファイルのパス
+       nullptr,                 // テクスチャリソース(SRVだけ必要なのでnullptr)
+       g_floorTextureView.GetAddressOf()
+   );
+
+   if (FAILED(hr))
+   {
+       MessageBox(nullptr, L"テクスチャの読み込みに失敗", L"エラー", MB_OK);
+       return false;
+   }
+
+
+   // --------------------------------------------------------
+   // サンプラーステートの作成
+   // --------------------------------------------------------
+   D3D11_SAMPLER_DESC sampDesc = {};
+   sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;   // 拡大・縮小・ミップのすべてに線形補間
+   sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;      // U方向: 繰り返し（タイリング）
+   sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;      // V方向: 繰り返し
+   sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+   sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+   sampDesc.MinLOD = 0;
+   sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+
+   hr = g_device->CreateSamplerState(&sampDesc, g_sampler.GetAddressOf());
+   if (FAILED(hr))
+   {
+       return false;
+   }
+
+
+   // --------------------------------------------------------
+   // ライト用の定数バッファの作成
+   // --------------------------------------------------------
+   D3D11_BUFFER_DESC lbDesc = {};
+   lbDesc.Usage = D3D11_USAGE_DEFAULT;
+   lbDesc.ByteWidth = sizeof(LightBuffer);
+   lbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+   hr = g_device->CreateBuffer(&lbDesc, nullptr, g_lightBuffer.GetAddressOf());
+   if (FAILED(hr))
+   {
+       return false;
+   }
+
    return true;
 }
 
@@ -596,7 +695,7 @@ void UpdateCamera(float deltaTime)
     // マウス入力 → ヨーとピッチの更新
     // --------------------------------------------------------
     if (g_mouseCaptured)
-    {
+    { 
 		POINT currentMousePos;
 		GetCursorPos(&currentMousePos);
 
@@ -743,10 +842,6 @@ void Render(float deltaTime)
     // 重要: DirectXMathは行優先(row-major)、HLSLはデフォルトで列優先(column-major)。
     // mul() が正しく動作するように、行列を転置してから渡す
 	ConstantBuffer cb;
-	//cb.wvp = XMMatrixTranspose(wvp);
-
-    // UpdateSubresource でGPU上の定数バッファを更新する
-	//g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
 
     // 定数バッファを頂点シェーダーのスロット0に設定
     // register(b0) に対応する
@@ -784,6 +879,21 @@ void Render(float deltaTime)
     g_deviceContext->VSSetShader(g_vertexShader.Get(), nullptr, 0);
     g_deviceContext->PSSetShader(g_pixelShader.Get(), nullptr, 0);
 
+    // テクスチャとサンプラーをピクセルシェーダーに設定
+    g_deviceContext->PSSetSamplers(0, 1, g_sampler.GetAddressOf());            // register(s0)に対応
+
+    // ---- ライトバッファの更新 ----
+    LightBuffer lb
+    lb.lightDirection = XMFLOAT3(0.5f, -1.0f, 0.3f); // 斜め上から当たる光
+    lb.padding1 = 0;
+    lb.lightColor = XMFLOAT3(1.0f, 1.0f, 0.95f); // やや暖かい白色光
+    lb.padding2 = 0;
+    lb.cameraPosition = g_camPosition;
+    lb.shininess = 32.0f;
+
+    g_deviceContext->UpdateSubresource(g_lightBuffer.Get(), 0, nullptr, &lb, 0, 0);
+    g_deviceContext->PSSetConstantBuffers(1, 1, g_lightBuffer.GetAddressOf());
+
     // --------------------------------------------------------
     // 描画コマンドの発行
     // --------------------------------------------------------
@@ -794,20 +904,18 @@ void Render(float deltaTime)
     //g_deviceContext->DrawIndexed(36, 0, 0);
 
     XMFLOAT3 cubePositions[] = {
-    { 0.0f, 0.0f,  0.0f },
-    { 3.0f, 0.0f,  0.0f },
-    {-3.0f, 0.0f,  2.0f },
-    { 0.0f, 0.0f,  5.0f },
-    { 2.0f, 1.0f, -2.0f },
+    { 0.0f, 0.0f,  0.0f }
     };
 
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 1; i++)
     {
         XMMATRIX cubeWorld = XMMatrixRotationY(angle * (i + 1) * 0.3f)
             * XMMatrixTranslation(cubePositions[i].x,
                 cubePositions[i].y,
                 cubePositions[i].z);
+        g_deviceContext->PSSetShaderResources(0, 1, g_textureView.GetAddressOf()); // register(t0)に対応
         cb.wvp = XMMatrixTranspose(cubeWorld * view * projection);
+        cb.world = XMMatrixTranspose(cubeWorld);
         g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
         g_deviceContext->DrawIndexed(36, 0, 0);
     }
@@ -815,7 +923,9 @@ void Render(float deltaTime)
 
     XMMATRIX floorWorld = XMMatrixIdentity();   // 回転なし
     XMMATRIX floorWvp = floorWorld * view * projection;
+    g_deviceContext->PSSetShaderResources(0, 1, g_floorTextureView.GetAddressOf()); // register(t0)に対応
     cb.wvp = XMMatrixTranspose(floorWvp);
+	cb.world = XMMatrixTranspose(floorWorld);
     g_deviceContext->UpdateSubresource(g_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
     g_deviceContext->VSSetConstantBuffers(0, 1, g_constantBuffer.GetAddressOf());
     g_deviceContext->IASetVertexBuffers(0, 1, g_floorVertexBuffer.GetAddressOf(), &stride, &offset);
@@ -857,6 +967,8 @@ int WINAPI WinMain(
     // 使わない引数を明示的にマーク（コンパイラ警告の抑制）
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
+
+	CoInitializeEx(nullptr, COINIT_MULTITHREADED); // COMの初期化（DirectXで必要）
 
     // --------------------------------------------------------
     // 1. ウィンドウクラスの登録
@@ -1006,6 +1118,8 @@ int WINAPI WinMain(
         }
     }
 
+	CoUninitialize(); // COMのクリーンアップ
+
     return static_cast<int>(msg.wParam);
 }
 
@@ -1103,6 +1217,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         PostQuitMessage(0);     // メッセージキューにWM_QUITを投入 → GetMessage()が0を返す
         return 0;
     }
+
 
     // 自分で処理しないメッセージはOSのデフォルト処理に委譲
     return DefWindowProc(hwnd, msg, wParam, lParam);
