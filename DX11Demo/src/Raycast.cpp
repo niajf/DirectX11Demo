@@ -45,6 +45,6 @@ void Raycast::getRayVector(
 		world
 	);
 
-	origin = fWorldPos;
+	origin = nWorldPos;
 	direction = XMVector3Normalize(XMVectorSubtract(fWorldPos, nWorldPos));
 }

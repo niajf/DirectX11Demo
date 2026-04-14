@@ -4,6 +4,7 @@
 #ifndef UNICODE
 #define UNICODE
 #endif
+#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>

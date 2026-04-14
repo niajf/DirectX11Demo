@@ -1,6 +1,6 @@
 #include "DX11Demo/Renderer.h"
 #include "DX11Demo/Camera.h"
-#include "DX11Demo/cubeManager.h"
+#include "DX11Demo/CubeManager.h"
 #include <string>
 
 // グローバルレンダラーインスタンスの定義
@@ -396,9 +396,6 @@ void Renderer::Render(float deltaTime)
     m_deviceContext->PSSetConstantBuffers(1, 1, m_lightBuffer.GetAddressOf());
 
     // ---- キューブの描画 ----
-    static float angle = 0.0f;
-    angle += deltaTime * 1.0f;
-
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
     ConstantBuffer cb;

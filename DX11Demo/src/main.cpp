@@ -70,11 +70,7 @@ int WINAPI WinMain(
     MSG msg = {};
     bool isRunning = true;
     float fpsTimer = 0.0f;
-    int   frameCount = 0;
-
-    // ---- キューブの追加 ----
-    
-    
+    int   frameCount = 0;    
 
     while (isRunning)
     {

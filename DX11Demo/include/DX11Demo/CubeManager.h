@@ -14,7 +14,7 @@ public:
 	void upScale();
 	void downScale();
 	void setMousePosition(float x, float y);
-	Cube getCube(int index);
+	Cube& getCube(int index);
 	int getScale();
 	size_t size();
 

@@ -27,15 +27,15 @@ void CubeManager::Update(float deltaTime, XMMATRIX projection, XMMATRIX view)
 		);
 
 		float t = 0.0f;
-		if(abs(XMVectorGetY(direction)) > 0.0f)
-			t = ((currentScale.y / 2.0f) - XMVectorGetY(origin) - 0.5f) / XMVectorGetY(direction);
+		if(fabsf(XMVectorGetY(direction)) > 0.0001f)
+			t = (- XMVectorGetY(origin) - 0.5f) / XMVectorGetY(direction);
 
-		if (t < 0.0f)
+		if (t > 0.0f)
 		{
 			XMFLOAT3 position;
 			XMVECTOR vec = XMVectorAdd(origin, t * direction);
 			XMStoreFloat3(&position, vec);
-
+			position.y = -0.5f + (currentScale.y / 2.0f);
 			setCube(position);
 		}
 	}
@@ -67,7 +67,7 @@ void CubeManager::setCube(XMFLOAT3 position)
 	cubes.push_back(Cube(position, currentScale, 0.0f));
 }
 
-Cube CubeManager::getCube(int index)
+Cube& CubeManager::getCube(int index)
 {
 	return cubes[index];
 }
