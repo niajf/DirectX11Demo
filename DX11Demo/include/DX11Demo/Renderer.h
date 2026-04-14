@@ -1,6 +1,7 @@
 #pragma once
-#include "Common.h"
-#include "Types.h"
+#include "DX11Demo/Common.h"
+#include "DX11Demo/Types.h"
+#include "DX11Demo/Cube.h"
 
 // ============================================================
 // Renderer — Direct3D 11 の初期化・リソース管理・描画
@@ -30,6 +31,7 @@ private:
     // ---- シェーダーコンパイルユーティリティ ----
     static bool CompileShader(const wchar_t* filePath, const char* entryPoint,
         const char* profile, ComPtr<ID3DBlob>& blob);
+
 
     // ---- D3D11 コアオブジェクト ----
     ComPtr<ID3D11Device>           m_device;

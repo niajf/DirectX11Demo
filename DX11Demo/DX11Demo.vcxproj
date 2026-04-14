@@ -134,7 +134,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Camera.cpp" />
+    <ClCompile Include="src\CubeManager.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\Raycast.cpp" />
     <ClCompile Include="src\Renderer.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -153,6 +155,9 @@
   <ItemGroup>
     <ClInclude Include="include\DX11Demo\Camera.h" />
     <ClInclude Include="include\DX11Demo\Common.h" />
+    <ClInclude Include="include\DX11Demo\Cube.h" />
+    <ClInclude Include="include\DX11Demo\CubeManager.h" />
+    <ClInclude Include="include\DX11Demo\Raycast.h" />
     <ClInclude Include="include\DX11Demo\Types.h" />
     <ClInclude Include="include\DX11Demo\Renderer.h" />
   </ItemGroup>

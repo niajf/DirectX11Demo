@@ -1,5 +1,7 @@
 #include "DX11Demo/Renderer.h"
 #include "DX11Demo/Camera.h"
+#include "DX11Demo/cubeManager.h"
+#include <string>
 
 // グローバルレンダラーインスタンスの定義
 Renderer g_renderer;
@@ -399,16 +401,26 @@ void Renderer::Render(float deltaTime)
 
     UINT stride = sizeof(Vertex);
     UINT offset = 0;
-
-    XMMATRIX cubeWorld = XMMatrixRotationY(angle);
     ConstantBuffer cb;
-    cb.wvp = XMMatrixTranspose(cubeWorld * view * projection);
-    cb.world = XMMatrixTranspose(cubeWorld);
-    m_deviceContext->UpdateSubresource(m_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
-    m_deviceContext->PSSetShaderResources(0, 1, m_textureView.GetAddressOf());
-    m_deviceContext->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
-    m_deviceContext->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
-    m_deviceContext->DrawIndexed(36, 0, 0);
+
+    for (int i = 0; i < g_cubeManager.size(); i++)
+    {
+        Cube cube = g_cubeManager.getCube(i);
+        XMMATRIX cubeWorld = XMMatrixScaling(cube.scale.x, cube.scale.y, cube.scale.z)
+            * XMMatrixRotationY(cube.angle)
+            * XMMatrixTranslation(
+                cube.position.x,
+                cube.position.y,
+                cube.position.z 
+            );
+        cb.wvp = XMMatrixTranspose(cubeWorld * view * projection);
+        cb.world = XMMatrixTranspose(cubeWorld);
+        m_deviceContext->UpdateSubresource(m_constantBuffer.Get(), 0, nullptr, &cb, 0, 0);
+        m_deviceContext->PSSetShaderResources(0, 1, m_textureView.GetAddressOf());
+        m_deviceContext->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
+        m_deviceContext->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+        m_deviceContext->DrawIndexed(36, 0, 0);
+    }
 
     // ---- 床の描画 ----
     XMMATRIX floorWorld = XMMatrixIdentity();

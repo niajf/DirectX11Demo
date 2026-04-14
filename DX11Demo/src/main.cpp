@@ -1,6 +1,7 @@
 #include "DX11Demo/Common.h"
 #include "DX11Demo/Renderer.h"
 #include "DX11Demo/Camera.h"
+#include "DX11Demo/CubeManager.h"
 
 // ---- 前方宣言 ----
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -71,6 +72,10 @@ int WINAPI WinMain(
     float fpsTimer = 0.0f;
     int   frameCount = 0;
 
+    // ---- キューブの追加 ----
+    
+    
+
     while (isRunning)
     {
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -88,6 +93,7 @@ int WINAPI WinMain(
                 / static_cast<float>(frequency.QuadPart);
             previousTime = currentTime;
 
+            g_cubeManager.Update(deltaTime, g_camera.GetProjectionMatrix(), g_camera.GetViewMatrix());
             g_camera.Update(deltaTime);
             g_renderer.Render(deltaTime);
 
@@ -97,7 +103,7 @@ int WINAPI WinMain(
             if (fpsTimer >= 1.0f)
             {
                 wchar_t title[64];
-                swprintf_s(title, L"%s - FPS: %d", WINDOW_TITLE, frameCount);
+                swprintf_s(title, L"%s - FPS: %d, CubeScale : %d", WINDOW_TITLE, frameCount, g_cubeManager.getScale());
                 SetWindowText(hwnd, title);
                 fpsTimer = 0.0f;
                 frameCount = 0;
@@ -135,6 +141,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case 'A': g_camera.keyA = true; break;
         case 'S': g_camera.keyS = true; break;
         case 'D': g_camera.keyD = true; break;
+        case VK_UP: g_cubeManager.keyUp = true; break;
+        case VK_DOWN: g_cubeManager.keyDown = true; break;
         }
         return 0;
 
@@ -145,6 +153,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case 'A': g_camera.keyA = false; break;
         case 'S': g_camera.keyS = false; break;
         case 'D': g_camera.keyD = false; break;
+        case VK_UP: g_cubeManager.keyUp = false; break;
+        case VK_DOWN: g_cubeManager.keyDown = false; break;
         }
         return 0;
 
@@ -161,6 +171,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             GetCursorPos(&g_camera.lastMousePos);
         }
+        return 0;
+
+    case WM_RBUTTONDOWN:
+        g_cubeManager.button = true;
+        g_cubeManager.setMousePosition(LOWORD(lParam), HIWORD(lParam));
+        return 0;
+
+    case WM_RBUTTONUP:
+        g_cubeManager.button = false;
         return 0;
 
     case WM_DESTROY:
