@@ -19,7 +19,12 @@ int WINAPI WinMain(
     UNREFERENCED_PARAMETER(lpCmdLine);
 
     // COM の初期化（WICTextureLoader が内部で使用する）
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(hr))
+    {
+        MessageBox(nullptr, L"COMの初期化に失敗", L"エラー", MB_OK);
+        return -1;
+    }
 
     // ---- ウィンドウクラス登録 ----
     WNDCLASSEX wc = {};

@@ -14,16 +14,16 @@ public:
 	void upScale();
 	void downScale();
 	void setMousePosition(float x, float y);
-	Cube& getCube(int index);
-	int getScale();
-	size_t size();
+	const Cube& getCube(size_t index) const;
+	int getScale() const;
+	size_t size() const;
 
 private:
 	bool buttonPressed = false;
 	bool upPressed = false;
 	bool downPressed = false;
-	float mouseX;
-	float mouseY;
+	float mouseX = 0.0f;
+	float mouseY = 0.0f;
 	std::vector<Cube> cubes;
 	XMFLOAT3 currentScale = { 1.0f, 1.0f, 1.0f }; 
 

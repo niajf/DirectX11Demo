@@ -400,7 +400,7 @@ void Renderer::Render(float deltaTime)
     UINT offset = 0;
     ConstantBuffer cb;
 
-    for (int i = 0; i < g_cubeManager.size(); i++)
+    for (size_t i = 0; i < g_cubeManager.size(); i++)
     {
         Cube cube = g_cubeManager.getCube(i);
         XMMATRIX cubeWorld = XMMatrixScaling(cube.scale.x, cube.scale.y, cube.scale.z)

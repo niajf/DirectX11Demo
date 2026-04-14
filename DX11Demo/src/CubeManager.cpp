@@ -67,12 +67,12 @@ void CubeManager::setCube(XMFLOAT3 position)
 	cubes.push_back(Cube(position, currentScale, 0.0f));
 }
 
-Cube& CubeManager::getCube(int index)
+const Cube& CubeManager::getCube(size_t index) const
 {
 	return cubes[index];
 }
 
-size_t CubeManager::size()
+size_t CubeManager::size() const
 {
 	return cubes.size();
 }
@@ -101,7 +101,7 @@ void CubeManager::downScale()
 	currentScale = XMFLOAT3(s, s, s);
 }
 
-int CubeManager::getScale()
+int CubeManager::getScale() const
 {
 	return (int)currentScale.x;
 }
